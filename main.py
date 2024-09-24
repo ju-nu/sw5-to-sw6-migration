@@ -106,8 +106,16 @@ def create_sw6_media_folder():
     }
     response = requests.post(url, json=payload, headers=sw6_headers())
     response.raise_for_status()
-    data = response.json()
-    return data['id']
+
+    if response.content:
+        data = response.json()
+        return data['id']
+    else:
+        # No content in response, try to find the media folder again
+        media_folder_id = get_sw6_media_folder_id()
+        if not media_folder_id:
+            raise Exception("Failed to create or retrieve media folder.")
+        return media_folder_id
 
 def get_default_media_folder_configuration_id():
     # Get default configuration ID for media folders
@@ -165,6 +173,16 @@ def get_sw5_product(article_number):
         return None
     else:
         response.raise_for_status()
+
+def get_sw5_media(media_id):
+    url = f"{SW5_API_URL}/api/media/{media_id}"
+    auth = (SW5_API_USER, SW5_API_KEY)
+    response = requests.get(url, auth=auth)
+    if response.status_code == 200:
+        return response.json()['data']
+    else:
+        print(f"Error fetching media with ID {media_id} from SW5.")
+        return None
 
 def get_sw5_media_url(media_data):
     # Extract media URL from SW5 media data
@@ -270,14 +288,17 @@ def main():
             if images:
                 media_ids = []
                 for idx, image in enumerate(images):
-                    media_data = image.get('media')
+                    media_id = image.get('mediaId')
+                    if not media_id:
+                        continue
+                    # Fetch media data using media_id
+                    media_data = get_sw5_media(media_id)
                     if not media_data:
                         continue
                     # Get media URL, filename, and alt text
                     sw5_media_url = get_sw5_media_url(media_data)
-                    filename = media_data.get('fileName', f"image_{idx}")
+                    filename = media_data.get('name', f"image_{idx}")
                     alt_text = media_data.get('description', '')
-
                     # Upload media to SW6
                     try:
                         sw6_media_id = upload_media_to_sw6(sw5_media_url, media_folder_id, filename, alt_text)
@@ -287,7 +308,6 @@ def main():
                         })
                     except Exception as e:
                         print(f"Error uploading media for product {article_number}: {e}")
-
                 # Set the first image as the cover image
                 if media_ids:
                     cover_id = media_ids[0]['mediaId']
