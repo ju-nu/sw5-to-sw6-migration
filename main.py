@@ -17,7 +17,7 @@ SW6_API_URL = os.getenv('SW6_API_URL').rstrip('/')
 SW6_ACCESS_KEY = os.getenv('SW6_ACCESS_KEY')
 SW6_SECRET_KEY = os.getenv('SW6_SECRET_KEY')
 
-# Sales Channel Name
+# Sales Channel Name (Set to Picksport as per your request)
 SALES_CHANNEL_NAME = os.getenv('SALES_CHANNEL_NAME')
 
 # Media Folder Name in SW6
@@ -69,6 +69,13 @@ def get_sales_channel_id():
         raise Exception(f"Sales channel '{SALES_CHANNEL_NAME}' not found.")
 
     return data['data'][0]['id']
+
+def get_default_language_id():
+    url = f"{SW6_API_URL}/api/_info/config"
+    response = requests.get(url, headers=sw6_headers())
+    response.raise_for_status()
+    data = response.json()
+    return data.get('systemLanguageId')
 
 def get_sw6_media_folder_id():
     # Search for the media folder by name
@@ -184,7 +191,7 @@ def get_sw5_media(media_id):
         print(f"Error fetching media with ID {media_id} from SW5.")
         return None
 
-def get_sw5_media_url(media_data):
+def get_sw5_media_url_and_extension(media_data):
     # Extract media URL from SW5 media data
     path = media_data['path']
     # If 'path' is already a full URL, use it directly
@@ -194,9 +201,36 @@ def get_sw5_media_url(media_data):
         # Construct the full media URL
         base_url = SW5_API_URL.rstrip('/api')
         media_url = f"{base_url}/{path}"
-    return media_url
+    # Extract the file extension from the path
+    extension = os.path.splitext(path)[1][1:]  # Get extension without the dot
+    return media_url, extension
 
-def upload_media_to_sw6(media_url, media_folder_id, filename, alt_text):
+def get_existing_media_id(filename_base, extension):
+    url = f"{SW6_API_URL}/api/search/media"
+    payload = {
+        "filter": [
+            {"type": "equals", "field": "fileName", "value": filename_base},
+            {"type": "equals", "field": "fileExtension", "value": extension}
+        ],
+        "limit": 1
+    }
+    response = requests.post(url, json=payload, headers=sw6_headers())
+    response.raise_for_status()
+    data = response.json()
+    if data.get('data'):
+        return data['data'][0]['id']
+    else:
+        return None
+
+def upload_media_to_sw6(media_url, media_folder_id, filename_base, extension, alt_text):
+    # Check if media already exists
+    existing_media_id = get_existing_media_id(filename_base, extension)
+    if existing_media_id:
+        print(f"Media '{filename_base}.{extension}' already exists in SW6. Using existing media ID.")
+        # Optionally update alt text if needed
+        update_media_alt_text(existing_media_id, alt_text)
+        return existing_media_id
+
     # Generate a UUID for the new media entity
     media_id = uuid.uuid4().hex
 
@@ -211,8 +245,8 @@ def upload_media_to_sw6(media_url, media_folder_id, filename, alt_text):
     response.raise_for_status()
 
     # Upload the media file to SW6 using the media_id by providing the URL of the image
-    # Include the filename in the upload URL
-    upload_url = f"{SW6_API_URL}/api/_action/media/{media_id}/upload?fileName={quote(filename)}"
+    # Include the filename without extension and the extension separately
+    upload_url = f"{SW6_API_URL}/api/_action/media/{media_id}/upload?fileName={quote(filename_base)}&extension={extension}"
     headers = {
         'Authorization': f'Bearer {SW6_TOKEN}',
         'Content-Type': 'application/json'
@@ -221,10 +255,23 @@ def upload_media_to_sw6(media_url, media_folder_id, filename, alt_text):
         "url": media_url
     }
     response = requests.post(upload_url, json=upload_payload, headers=headers)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        print(f"Error uploading media for product: {e}")
+        print(f"Response content: {response.text}")
+        raise
 
     # Return the media_id to be used for the product
     return media_id
+
+def update_media_alt_text(media_id, alt_text):
+    url = f"{SW6_API_URL}/api/media/{media_id}"
+    payload = {
+        "alt": alt_text
+    }
+    response = requests.patch(url, json=payload, headers=sw6_headers())
+    response.raise_for_status()
 
 def get_sw6_category_ids(category_names):
     category_ids = []
@@ -244,13 +291,44 @@ def get_sw6_category_ids(category_names):
             category_id = data['data'][0]['id']
             category_ids.append({"id": category_id})
         else:
-            print(f"Category '{name}' not found in SW6. Skipping this category.")
+            print(f"Category '{name}' not found in SW6. Creating category.")
+            # Create the category
+            category_id = create_sw6_category(name)
+            if category_id:
+                category_ids.append({"id": category_id})
+            else:
+                print(f"Failed to create category '{name}'. Skipping this category.")
     return category_ids
+
+def create_sw6_category(name):
+    url = f"{SW6_API_URL}/api/category"
+    category_id = uuid.uuid4().hex
+    payload = {
+        "id": category_id,
+        "name": name
+    }
+    response = requests.post(url, json=payload, headers=sw6_headers())
+    try:
+        response.raise_for_status()
+        return category_id
+    except Exception as e:
+        print(f"Error creating category '{name}': {e}")
+        print(f"Response content: {response.text}")
+        return None
 
 def update_sw6_product(product_id, update_data):
     url = f"{SW6_API_URL}/api/product/{product_id}"
     response = requests.patch(url, json=update_data, headers=sw6_headers())
     response.raise_for_status()
+
+def to_bool(val):
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() == 'true'
+    if isinstance(val, int):
+        return bool(val)
+    return False
 
 def main():
     get_sw6_token()
@@ -264,6 +342,10 @@ def main():
     except Exception as e:
         print(f"Error retrieving media folder: {e}")
         return
+
+    # Get default language ID
+    language_id = get_default_language_id()
+
     sw6_products = get_sw6_products()
 
     for sw6_product in sw6_products:
@@ -278,7 +360,8 @@ def main():
             # Extract data from SW5 product
             description = sw5_product.get('descriptionLong') or sw5_product.get('description')
             meta_title = sw5_product.get('metaTitle')
-            meta_description = sw5_product.get('metaDescription')
+            meta_description = sw5_product.get('description')  # Use 'description' for metaDescription
+            active_state = to_bool(sw5_product.get('active', True))  # Ensure boolean type
 
             # Extract images from SW5 product
             images = sw5_product.get('images', [])
@@ -295,22 +378,31 @@ def main():
                     media_data = get_sw5_media(media_id)
                     if not media_data:
                         continue
-                    # Get media URL, filename, and alt text
-                    sw5_media_url = get_sw5_media_url(media_data)
-                    filename = media_data.get('name', f"image_{idx}")
+                    # Get media URL, filename base, extension, and alt text
+                    sw5_media_url, extension = get_sw5_media_url_and_extension(media_data)
+                    filename_base = media_data.get('name', f"image_{idx}")
+                    filename_base = os.path.splitext(filename_base)[0]  # Remove existing extension
+                    if not extension:
+                        extension = 'jpg'  # Default to 'jpg' if extension is missing
                     alt_text = media_data.get('description', '')
-                    # Upload media to SW6
+                    # Upload media to SW6 or use existing media
                     try:
-                        sw6_media_id = upload_media_to_sw6(sw5_media_url, media_folder_id, filename, alt_text)
+                        print(f"Processing file: {filename_base}.{extension}")
+                        sw6_media_id = upload_media_to_sw6(sw5_media_url, media_folder_id, filename_base, extension, alt_text)
+                        product_media_id = uuid.uuid4().hex
                         media_ids.append({
+                            "id": product_media_id,
                             "mediaId": sw6_media_id,
                             "position": idx
                         })
                     except Exception as e:
                         print(f"Error uploading media for product {article_number}: {e}")
+                        print(f"Filename: {filename_base}.{extension}")
+                        print(f"Media URL: {sw5_media_url}")
+                        continue
                 # Set the first image as the cover image
                 if media_ids:
-                    cover_id = media_ids[0]['mediaId']
+                    cover_id = media_ids[0]['id']  # Use the 'id' of the product media
                 else:
                     cover_id = None
             else:
@@ -319,18 +411,38 @@ def main():
 
             category_names = [category['name'] for category in sw5_product.get('categories', [])]
 
-            # Get SW6 category IDs
+            # Get SW6 category IDs (create if not exists)
             sw6_category_ids = get_sw6_category_ids(category_names)
             if not sw6_category_ids:
                 print(f"No matching categories found in SW6 for product {article_number}. Skipping category assignment.")
                 sw6_category_ids = []
 
+            # Extract custom fields from SW5
+            attr4 = sw5_product.get('mainDetail', {}).get('attribute', {}).get('attr4', False)
+            warenpost = sw5_product.get('mainDetail', {}).get('attribute', {}).get('warenpost', False)
+
+            # Convert to boolean
+            sim_protected_price = to_bool(attr4)
+            sim_warenpost = to_bool(warenpost)
+
+            custom_fields = {
+                "sim_protected_price": sim_protected_price,
+                "sim_warenpost": sim_warenpost
+            }
+
             # Prepare update data
             update_data = {
                 "id": sw6_product['id'],
-                "description": description,
-                "metaTitle": meta_title,
-                "metaDescription": meta_description,
+                "active": active_state,
+                "customFields": custom_fields,
+                "translations": {
+                    language_id: {
+                        "description": description,
+                        "metaTitle": meta_title,
+                        "metaDescription": meta_description
+                    }
+                }
+                # 'visibilities' field is omitted to avoid duplicate entry error
             }
             if sw6_category_ids:
                 update_data["categories"] = sw6_category_ids
