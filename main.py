@@ -3,6 +3,7 @@ import requests
 import dotenv
 import uuid
 import time
+import json
 
 from urllib.parse import quote
 
@@ -18,7 +19,7 @@ SW6_API_URL = os.getenv('SW6_API_URL').rstrip('/')
 SW6_ACCESS_KEY = os.getenv('SW6_ACCESS_KEY')
 SW6_SECRET_KEY = os.getenv('SW6_SECRET_KEY')
 
-# Sales Channel Name (Set to Picksport as per your request)
+# Sales Channel Name
 SALES_CHANNEL_NAME = "Picksport"
 
 # Media Folder Name in SW6
@@ -57,7 +58,7 @@ def sw6_headers():
         'Accept': 'application/json'
     }
 
-def get_sales_channel_id_and_language_id():
+def get_sales_channel_info():
     url = f"{SW6_API_URL}/api/search/sales-channel"
     payload = {
         "filter": [
@@ -69,7 +70,7 @@ def get_sales_channel_id_and_language_id():
         ],
         "limit": 1,
         "includes": {
-            "sales_channel": ["id", "languageId"]
+            "sales_channel": ["id", "languageId", "currencyId"]
         }
     }
     response = requests.post(url, json=payload, headers=sw6_headers())
@@ -86,7 +87,8 @@ def get_sales_channel_id_and_language_id():
     sales_channel = data['data'][0]
     sales_channel_id = sales_channel['id']
     language_id = sales_channel['languageId']
-    return sales_channel_id, language_id
+    currency_id = sales_channel['currencyId']
+    return sales_channel_id, language_id, currency_id
 
 def get_sw6_media_folder_id():
     # Search for the media folder by name
@@ -148,10 +150,6 @@ def get_default_media_folder_configuration_id():
         return data['data'][0]['id']
     else:
         raise Exception("No media folder configuration found in SW6.")
-
-import json  # At the top of your script
-
-import time  # Make sure to import time at the beginning of your script
 
 def get_sw6_products():
     url = f"{SW6_API_URL}/api/search/product"
@@ -385,12 +383,32 @@ def to_bool(val):
         return bool(val)
     return False
 
+def get_tax_id_by_rate(tax_rate):
+    url = f"{SW6_API_URL}/api/search/tax"
+    payload = {
+        "filter": [
+            {
+                "type": "equals",
+                "field": "taxRate",
+                "value": tax_rate
+            }
+        ],
+        "limit": 1
+    }
+    response = requests.post(url, json=payload, headers=sw6_headers())
+    response.raise_for_status()
+    data = response.json()
+    if data.get('data'):
+        return data['data'][0]['id']
+    else:
+        raise Exception(f"No tax rate {tax_rate}% found in SW6.")
+
 def main():
     get_sw6_token()
     try:
-        sales_channel_id, language_id = get_sales_channel_id_and_language_id()
+        sales_channel_id, language_id, default_currency_id = get_sales_channel_info()
     except Exception as e:
-        print(f"Error retrieving sales channel or language ID: {e}")
+        print(f"Error retrieving sales channel, language ID, or currency ID: {e}")
         return
     try:
         media_folder_id = get_sw6_media_folder_id()
@@ -418,6 +436,42 @@ def main():
         sw5_product = get_sw5_product(article_number)
 
         if sw5_product:
+            # Get the tax rate from SW5 product
+            tax_rate = sw5_product.get('tax', {}).get('tax', 19.0)  # Default to 19% if not specified
+            tax_rate = float(tax_rate)  # Ensure tax_rate is a float
+
+            # Get the tax ID in SW6 corresponding to this tax rate
+            try:
+                tax_id = get_tax_id_by_rate(tax_rate)
+            except Exception as e:
+                print(f"Error retrieving tax ID for tax rate {tax_rate}%: {e}")
+                continue
+
+            # Get the standard price from SW5
+            prices = sw5_product.get('mainDetail', {}).get('prices', [])
+            if prices:
+                # Assuming the first price is the standard price
+                sw5_price = prices[0].get('price')
+            else:
+                sw5_price = None
+
+            if sw5_price is not None:
+                # SW5 price is gross price
+                gross_price = float(sw5_price)
+                # Calculate net price based on the gross price and tax rate
+                net_price = gross_price / (1 + tax_rate / 100)
+                net_price = round(net_price, 2)  # Optional rounding
+                price_data = [
+                    {
+                        "currencyId": default_currency_id,
+                        "gross": gross_price,
+                        "net": net_price,
+                        "linked": False  # Prices are not linked
+                    }
+                ]
+            else:
+                price_data = None
+
             # Extract data from SW5 product
             description = sw5_product.get('descriptionLong') or sw5_product.get('description')
             meta_title = sw5_product.get('metaTitle')
@@ -555,6 +609,9 @@ def main():
                 update_data["categories"] = sw6_category_ids
             if cover_id:
                 update_data["coverId"] = cover_id
+            if price_data:
+                update_data["price"] = price_data
+                update_data["taxId"] = tax_id
 
             # Update product in SW6
             try:
