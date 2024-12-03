@@ -349,6 +349,22 @@ def update_sw6_product(product_id, update_data):
     response = requests.patch(url, json=update_data, headers=sw6_headers())
     response.raise_for_status()
 
+def get_existing_product_visibilities(product_id):
+    url = f"{SW6_API_URL}/api/search/product-visibility"
+    payload = {
+        "filter": [
+            {"type": "equals", "field": "productId", "value": product_id}
+        ],
+        "includes": {
+            "product_visibility": ["id", "salesChannelId", "visibility"]
+        },
+        "limit": 50  # Adjust as needed
+    }
+    response = requests.post(url, json=payload, headers=sw6_headers())
+    response.raise_for_status()
+    data = response.json()
+    return data.get('data', [])
+
 def to_bool(val):
     if isinstance(val, bool):
         return val
@@ -476,6 +492,32 @@ def main():
                 "sim_warenpost": sim_warenpost
             }
 
+                    # Fetch existing visibilities for the product
+            existing_visibilities = get_existing_product_visibilities(sw6_product['id'])
+
+            # Prepare the visibility entry
+            visibilities = []
+            existing_visibility = next(
+                (vis for vis in existing_visibilities if vis['salesChannelId'] == sales_channel_id),
+                None
+            )
+
+            if existing_visibility:
+                # Update existing visibility
+                visibilities.append({
+                    "id": existing_visibility['id'],
+                    "productId": sw6_product['id'],
+                    "salesChannelId": sales_channel_id,
+                    "visibility": 30  # Desired visibility level (30 for "All")
+                })
+            else:
+                # Create new visibility
+                visibilities.append({
+                    "productId": sw6_product['id'],
+                    "salesChannelId": sales_channel_id,
+                    "visibility": 30  # Desired visibility level
+                })
+
             # Prepare update data
             update_data = {
                 "id": sw6_product['id'],
@@ -488,8 +530,8 @@ def main():
                         "metaDescription": meta_description
                     }
                 },
-                "media": all_media_entries
-                # 'visibilities' field is omitted to avoid duplicate entry error
+                "media": all_media_entries,
+                "visibilities": visibilities           
             }
             if sw6_category_ids:
                 update_data["categories"] = sw6_category_ids
