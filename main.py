@@ -436,9 +436,18 @@ def main():
         sw5_product = get_sw5_product(article_number)
 
         if sw5_product:
+            # For debugging: print SW5 product data
+            # Uncomment the lines below to see the SW5 product data
+            # print(f"SW5 Product Data for {article_number}:")
+            # print(json.dumps(sw5_product, indent=4))
+
             # Get the tax rate from SW5 product
             tax_rate = sw5_product.get('tax', {}).get('tax', 19.0)  # Default to 19% if not specified
-            tax_rate = float(tax_rate)  # Ensure tax_rate is a float
+            try:
+                tax_rate = float(tax_rate)  # Ensure tax_rate is a float
+            except ValueError:
+                print(f"Invalid tax rate '{tax_rate}' for product {article_number}. Skipping.")
+                continue
 
             # Get the tax ID in SW6 corresponding to this tax rate
             try:
@@ -456,11 +465,17 @@ def main():
                 sw5_price = None
 
             if sw5_price is not None:
-                # SW5 price is gross price
-                gross_price = float(sw5_price)
-                # Calculate net price based on the gross price and tax rate
-                net_price = gross_price / (1 + tax_rate / 100)
-                net_price = round(net_price, 2)  # Optional rounding
+                try:
+                    # SW5 price is net price
+                    net_price = float(sw5_price)
+                except ValueError:
+                    print(f"Invalid net price '{sw5_price}' for product {article_number}. Skipping.")
+                    continue
+
+                # Calculate gross price based on the net price and tax rate
+                gross_price = net_price * (1 + tax_rate / 100)
+                gross_price = round(gross_price, 2)  # Optional rounding
+
                 price_data = [
                     {
                         "currencyId": default_currency_id,
@@ -603,15 +618,14 @@ def main():
                     }
                 },
                 "media": all_media_entries,
-                "visibilities": visibilities
+                "visibilities": visibilities,
+                "price": price_data,
+                "taxId": tax_id
             }
             if sw6_category_ids:
                 update_data["categories"] = sw6_category_ids
             if cover_id:
                 update_data["coverId"] = cover_id
-            if price_data:
-                update_data["price"] = price_data
-                update_data["taxId"] = tax_id
 
             # Update product in SW6
             try:
