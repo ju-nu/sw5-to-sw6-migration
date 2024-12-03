@@ -24,22 +24,33 @@ SALES_CHANNEL_NAME = "Picksport"
 # Media Folder Name in SW6
 SW6_MEDIA_FOLDER_NAME = os.getenv('SW6_MEDIA_FOLDER_NAME')
 
-# Bearer Token for SW6 API
 SW6_TOKEN = None
+SW6_TOKEN_EXPIRES_AT = 0
 
 def get_sw6_token():
     global SW6_TOKEN
+    global SW6_TOKEN_EXPIRES_AT
+
     url = f"{SW6_API_URL}/api/oauth/token"
     payload = {
-        'grant_type': 'client_credentials',
-        'client_id': SW6_ACCESS_KEY,
-        'client_secret': SW6_SECRET_KEY
+        "client_id": SW6_ACCESS_KEY,
+        "client_secret": SW6_SECRET_KEY,
+        "grant_type": "client_credentials"
     }
     response = requests.post(url, data=payload)
     response.raise_for_status()
-    SW6_TOKEN = response.json()['access_token']
+    data = response.json()
+    SW6_TOKEN = data['access_token']
+    expires_in = data.get('expires_in', 3600)  # Default to 3600 seconds if not provided
+    SW6_TOKEN_EXPIRES_AT = time.time() + expires_in - 60  # Refresh 60 seconds before expiry
+
+def ensure_sw6_token():
+    if time.time() >= SW6_TOKEN_EXPIRES_AT:
+        print("Access token expired or about to expire. Refreshing token...")
+        get_sw6_token()
 
 def sw6_headers():
+    ensure_sw6_token()
     return {
         'Authorization': f'Bearer {SW6_TOKEN}',
         'Content-Type': 'application/json',
