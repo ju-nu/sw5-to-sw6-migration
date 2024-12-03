@@ -399,14 +399,21 @@ def main():
         return
 
     sw6_products = get_sw6_products()
+    total_products = len(sw6_products)  # Total number of products
 
-    for sw6_product in sw6_products:
+    for idx, sw6_product in enumerate(sw6_products, start=1):
         article_number = sw6_product.get('productNumber')
         if not article_number:
             print(f"Product ID {sw6_product['id']} does not have a product number.")
             continue
 
-        print(f"Processing product with article number: {article_number}")
+        # Calculate progress
+        products_remaining = total_products - idx
+        percentage_complete = (idx / total_products) * 100
+
+        # Updated print statement with progress indicators
+        print(f"Processing product {idx}/{total_products} with article number: {article_number} "
+              f"({products_remaining} remaining, {percentage_complete:.2f}% complete)")
 
         sw5_product = get_sw5_product(article_number)
 
@@ -429,7 +436,7 @@ def main():
             media_ids = []
 
             if images:
-                for idx, image in enumerate(images):
+                for idx_img, image in enumerate(images):
                     media_id = image.get('mediaId')
                     if not media_id:
                         continue
@@ -439,7 +446,7 @@ def main():
                         continue
                     # Get media URL, filename base, extension, and alt text
                     sw5_media_url, extension = get_sw5_media_url_and_extension(media_data)
-                    filename_base = media_data.get('name', f"image_{idx}")
+                    filename_base = media_data.get('name', f"image_{idx_img}")
                     filename_base = os.path.splitext(filename_base)[0]  # Remove existing extension
                     if not extension:
                         extension = 'jpg'  # Default to 'jpg' if extension is missing
@@ -454,14 +461,14 @@ def main():
                             print(f"Media {filename_base}.{extension} is already associated with product {article_number}.")
                             # Use existing ProductMedia entry and update position if necessary
                             product_media_entry = existing_media_map[sw6_media_id]
-                            product_media_entry['position'] = idx
+                            product_media_entry['position'] = idx_img
                         else:
                             # Create new ProductMedia entry
                             product_media_id = uuid.uuid4().hex
                             product_media_entry = {
                                 "id": product_media_id,
                                 "mediaId": sw6_media_id,
-                                "position": idx
+                                "position": idx_img
                             }
                         media_ids.append(product_media_entry)
 
@@ -503,7 +510,7 @@ def main():
                 "sim_warenpost": sim_warenpost
             }
 
-                    # Fetch existing visibilities for the product
+            # Fetch existing visibilities for the product
             existing_visibilities = get_existing_product_visibilities(sw6_product['id'])
 
             # Prepare the visibility entry
@@ -542,7 +549,7 @@ def main():
                     }
                 },
                 "media": all_media_entries,
-                "visibilities": visibilities           
+                "visibilities": visibilities
             }
             if sw6_category_ids:
                 update_data["categories"] = sw6_category_ids
