@@ -2,6 +2,7 @@ import os
 import requests
 import dotenv
 import uuid
+import time
 
 from urllib.parse import quote
 
@@ -137,11 +138,15 @@ def get_default_media_folder_configuration_id():
     else:
         raise Exception("No media folder configuration found in SW6.")
 
+import json  # At the top of your script
+
+import time  # Make sure to import time at the beginning of your script
+
 def get_sw6_products():
     url = f"{SW6_API_URL}/api/search/product"
     products = []
-    offset = 0
-    limit = 500  # Adjust as needed
+    page = 1
+    limit = 500  # Maximum allowed by Shopware
 
     while True:
         payload = {
@@ -149,23 +154,31 @@ def get_sw6_products():
                 "product": ["id", "productNumber"]
             },
             "limit": limit,
-            "offset": offset
+            "page": page,
+            "total-count-mode": 1  # Ensure total count is returned
         }
         response = requests.post(url, json=payload, headers=sw6_headers())
         response.raise_for_status()
         data = response.json()
 
+        total = data.get('total', 0)
+
         if not data.get('data'):
             break
 
         products.extend(data['data'])
+        print(f"Fetched page {page} with {len(data['data'])} products. Total fetched so far: {len(products)}")
 
-        total = data.get('total', 0)
         if len(products) >= total:
+            print("All products have been fetched.")
             break
 
-        offset += limit
+        page += 1
 
+        # Respect Shopware API rate limits
+        time.sleep(0.5)  # Adjust the sleep time as needed
+
+    print(f"Total number of products fetched from Shopware: {len(products)}")
     return products
 
 def get_sw5_product(article_number):
@@ -365,6 +378,8 @@ def main():
         if not article_number:
             print(f"Product ID {sw6_product['id']} does not have a product number.")
             continue
+
+        print(f"Processing product with article number: {article_number}")
 
         sw5_product = get_sw5_product(article_number)
 
