@@ -140,8 +140,8 @@ def get_default_media_folder_configuration_id():
 def get_sw6_products():
     url = f"{SW6_API_URL}/api/search/product"
     products = []
-    page = 1
-    limit = 500  # Maximum allowed by Shopware
+    offset = 0
+    limit = 500  # Adjust as needed
 
     while True:
         payload = {
@@ -149,7 +149,7 @@ def get_sw6_products():
                 "product": ["id", "productNumber"]
             },
             "limit": limit,
-            "page": page
+            "offset": offset
         }
         response = requests.post(url, json=payload, headers=sw6_headers())
         response.raise_for_status()
@@ -164,7 +164,7 @@ def get_sw6_products():
         if len(products) >= total:
             break
 
-        page += 1
+        offset += limit
 
     return products
 
